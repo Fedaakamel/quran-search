@@ -20,39 +20,68 @@ function normalizeArabic(text = "") {
 /* ============================================================
    2. Prefix Stripping
    ============================================================ */
-function stripPrefixes(word = "") {
-  const prefixes = ["ال", "و", "ف", "ب", "ل", "س"];
+function stripAffixes(word = "") {
+  const prefixes = ["ال", "وال", "فال", "بال", "كال", "لل", "و", "ف", "ب", "ل", "ك"];
+  const suffixes = ["ها", "هم", "هن", "كم", "كن", "نا", "ني", "ه", "ك"];
+  
   if (word.length <= 2) return word;
 
   let w = word;
-  let changed = true;
-
-  while (changed) {
-    changed = false;
-    for (const p of prefixes) {
-      if (w.startsWith(p) && w.length > p.length + 1) {
-        w = w.slice(p.length);
-        changed = true;
-        break;
-      }
+  
+  // Strip prefixes
+  for (const p of prefixes) {
+    if (w.startsWith(p) && w.length > p.length + 2) {
+      w = w.slice(p.length);
+      break;
     }
   }
+  
+  // Strip suffixes
+  for (const s of suffixes) {
+    if (w.endsWith(s) && w.length > s.length + 2) {
+      w = w.slice(0, -s.length);
+      break;
+    }
+  }
+  
   return w;
 }
 
 /* ============================================================
    3. Simple Similarity Score
+
+   3. Enhanced Similarity with Levenshtein Distance
    ============================================================ */
-function similarityScore(a, b) {
-  if (!a || !b) return 0;
-  let matches = 0;
-  const len = Math.min(a.length, b.length);
-  for (let i = 0; i < len; i++) {
-    if (a[i] === b[i]) matches++;
+function levenshteinDistance(a, b) {
+  const matrix = [];
+  for (let i = 0; i <= b.length; i++) matrix[i] = [i];
+  for (let j = 0; j <= a.length; j++) matrix[0][j] = j;
+  
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      if (b.charAt(i - 1) === a.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1];
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        );
+      }
+    }
   }
-  return matches / Math.max(a.length, b.length);
+  return matrix[b.length][a.length];
 }
 
+function similarityScore(a, b) {
+  if (!a || !b) return 0;
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+  if (longer.length === 0) return 1.0;
+  const dist = levenshteinDistance(longer, shorter);
+  return (longer.length - dist) / longer.length;
+}
+   ============================================================ */
 /* ============================================================
    4. Token Match Logic
    ============================================================ */
