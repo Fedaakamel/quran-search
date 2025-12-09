@@ -8,7 +8,7 @@ function normalizeArabic(text = "") {
     .toString()
     .replace(/ـ/g, "")
     .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "")
-    .replace(/[إأآٱءؤئ]/g, "ا")
+    .replace(/[إأآٱؤئ]/g, "ا")  // Keep ء separate for قرآن
     .replace(/ى/g, "ي")
     .replace(/ة/g, "ه")
     .replace(/[^\u0600-\u06FF\s]/g, " ")
@@ -60,18 +60,14 @@ function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
   const t = token.raw;
   const tStripped = token.stripped;
 
-  // Special handling for القرآن
-  const quranRoots = ["قران", "قرءان", "قرء"];
-  const tokenIsQuran = quranRoots.some(root => tStripped.includes(root));
+  // Special handling for القرآن - check multiple variations
+  const isQuranSearch = t.includes("قران") || t.includes("قراءن") || t.includes("قرءان");
 
-  if (tokenIsQuran) {
-    return ayWords.some(
-      (w) =>
-        w === "القران" ||
-        w === "قران" ||
-        w === "قرءان" ||
-        w === "القرءان" ||
-        similarityScore(w, tStripped) >= 0.90
+  if (isQuranSearch) {
+    // Match any of these variations in the ayah
+    const quranVariations = ["قران", "قراءن", "قرءان", "القران", "القراءن", "القرءان"];
+    return ayWords.some(w => 
+      quranVariations.some(qv => w.includes(qv) || qv.includes(w))
     );
   }
 
@@ -82,12 +78,17 @@ function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
     return false;
   }
 
-  // Normal search
+  // Normal search - relaxed matching
   if (ayNorm.includes(t)) return true;
   if (ayWords.includes(t)) return true;
   if (ayWordsStripped.includes(tStripped)) return true;
-  if (ayWords.some((w) => similarityScore(w, t) >= 0.88)) return true;
-  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.88)) return true;
+  
+  // Check if any word contains the token or vice versa
+  if (ayWords.some((w) => w.includes(t) || t.includes(w))) return true;
+  
+  // Fuzzy matching
+  if (ayWords.some((w) => similarityScore(w, t) >= 0.85)) return true;
+  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.85)) return true;
 
   return false;
 }
@@ -155,6 +156,7 @@ export default function QuranSearchApp() {
     }
 
     const qNorm = normalizeArabic(raw);
+    console.log("Searching for:", raw, "-> normalized:", qNorm);
 
     // Prepare tokens
     const tokens = qNorm.split(" ").filter(Boolean).map((t) => ({
@@ -162,6 +164,8 @@ export default function QuranSearchApp() {
       stripped: stripPrefixes(t),
       len: t.length,
     }));
+
+    console.log("Tokens:", tokens);
 
     const found = [];
 
@@ -197,7 +201,7 @@ export default function QuranSearchApp() {
       });
     });
 
-    console.log("Search results:", found.length);
+    console.log("Search results:", found.length, "verses found");
     setResults(found);
   };
 
