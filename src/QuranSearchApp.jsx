@@ -61,39 +61,56 @@ function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
   const t = token.raw;
   const tStripped = token.stripped;
 
-  /* -------------------------------
-     CASE A: SHORT TOKENS (<=2)
-     ONLY whole-word exact match
-     ------------------------------- */
+  /* ============================================================
+     SPECIAL RULE: القرآن / قرآن
+     ============================================================ */
+
+  const quranRoots = ["قران", "قرءان", "قرء", "قران", "قرائن"];
+  const tokenIsQuran =
+    quranRoots.includes(tStripped) || tStripped.startsWith("قران");
+
+  if (tokenIsQuran) {
+    // Only match exact (or close) Quran words
+    return ayWords.some(
+      (w) =>
+        w === "القران" ||
+        w === "قران" ||
+        w === "قرءان" ||
+        w === "القرءان" ||
+        similarityScore(w, tStripped) >= 0.90
+    );
+  }
+
+  /* ============================================================
+     SHORT TOKENS (<=2 letters)
+     ============================================================ */
   if (token.len <= 2) {
     if (ayWords.includes(t)) return true;
-
     if (ayWords.some((w) => similarityScore(w, t) >= 0.95)) return true;
-
     return false;
   }
 
-  /* -------------------------------
-     CASE B: LONG TOKENS
-     Flexible full and prefix-free
-     ------------------------------- */
+  /* ============================================================
+     NORMAL SEARCH
+     ============================================================ */
 
-  // phrase-like match
+  // phrase match
   if (ayNorm.includes(t)) return true;
 
-  // exact whole-word match
+  // whole-word match
   if (ayWords.includes(t)) return true;
 
   // stripped-word match
   if (ayWordsStripped.includes(tStripped)) return true;
 
-  // fuzzy match
-  if (ayWords.some((w) => similarityScore(w, t) >= 0.82)) return true;
-  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.82))
+  // fuzzy match (tightened from 0.82 → 0.88)
+  if (ayWords.some((w) => similarityScore(w, t) >= 0.88)) return true;
+  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.88))
     return true;
 
   return false;
 }
+
 
 /* ============================================================
    5. MAIN COMPONENT
