@@ -1,16 +1,51 @@
 import React, { useEffect, useState } from "react";
 
-// Normalize Arabic text
+// Remove Arabic harakat and normalize text
 function normalizeArabic(str) {
   return str
-    .replace(/[ًٌٍَُِّْ]/g, "") // remove harakat
+    .replace(/[ًٌٍَُِّْ]/g, "") // remove diacritics
     .replace(/أ/g, "ا")
     .replace(/إ/g, "ا")
     .replace(/آ/g, "ا")
-    .replace(/ى/g, "ي")
     .replace(/ؤ/g, "و")
     .replace(/ئ/g, "ي")
-    .replace(/ة/g, "ه");
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي");
+}
+
+// Calculate text similarity (for similar words 80%)
+function similarity(a, b) {
+  const longer = a.length > b.length ? a : b;
+  const shorter = a.length > b.length ? b : a;
+
+  const longerLength = longer.length;
+  if (longerLength === 0) return 1.0;
+
+  return (longerLength - editDistance(longer, shorter)) / longerLength;
+}
+
+function editDistance(a, b) {
+  a = normalizeArabic(a);
+  b = normalizeArabic(b);
+
+  const dp = Array(b.length + 1)
+    .fill(null)
+    .map(() => Array(a.length + 1).fill(null));
+
+  for (let i = 0; i <= b.length; i++) dp[i][0] = i;
+  for (let j = 0; j <= a.length; j++) dp[0][j] = j;
+
+  for (let i = 1; i <= b.length; i++) {
+    for (let j = 1; j <= a.length; j++) {
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + (a[j - 1] === b[i - 1] ? 0 : 1)
+      );
+    }
+  }
+
+  return dp[b.length][a.length];
 }
 
 export default function QuranSearchApp() {
@@ -18,15 +53,18 @@ export default function QuranSearchApp() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
 
-  // Load Quran JSON
+  // Load Quran JSON from public folder
   useEffect(() => {
     fetch("/quran.json")
       .then((res) => res.json())
-      .then((data) => setQuran(data))
+      .then((data) => {
+        console.log("Loaded Quran JSON:", data);
+        setQuran(data);
+      })
       .catch((err) => console.error("Error loading Quran:", err));
   }, []);
 
-  // Search function
+  // Search inside Quran
   const searchQuran = () => {
     if (!query.trim()) {
       setResults([]);
@@ -36,7 +74,7 @@ export default function QuranSearchApp() {
     const q = normalizeArabic(query.trim());
     const found = [];
 
-    // Loop through surahs
+    // Loop through surah numbers "1" → "114"
     Object.keys(quran).forEach((surahNum) => {
       const ayat = quran[surahNum];
 
@@ -45,7 +83,7 @@ export default function QuranSearchApp() {
       ayat.forEach((ayah) => {
         const ayahTextNorm = normalizeArabic(ayah.text);
 
-        // Exact + partial word similarity (80% match)
+        // Match: exact, partial, or similar (80%+)
         if (
           ayahTextNorm.includes(q) ||
           similarity(ayahTextNorm, q) >= 0.8
@@ -62,47 +100,13 @@ export default function QuranSearchApp() {
     setResults(found);
   };
 
-  // Similarity function
-  function similarity(a, b) {
-    const longer = a.length > b.length ? a : b;
-    const shorter = a.length > b.length ? b : a;
-
-    const longerLength = longer.length;
-    if (longerLength === 0) return 1.0;
-
-    return (longerLength - editDistance(longer, shorter)) / longerLength;
-  }
-
-  function editDistance(a, b) {
-    a = normalizeArabic(a);
-    b = normalizeArabic(b);
-
-    const dp = Array(b.length + 1)
-      .fill(null)
-      .map(() => Array(a.length + 1).fill(null));
-
-    for (let i = 0; i <= b.length; i++) dp[i][0] = i;
-    for (let j = 0; j <= a.length; j++) dp[0][j] = j;
-
-    for (let i = 1; i <= b.length; i++) {
-      for (let j = 1; j <= a.length; j++) {
-        dp[i][j] = Math.min(
-          dp[i - 1][j] + 1,
-          dp[i][j - 1] + 1,
-          dp[i - 1][j - 1] + (a[j - 1] === b[i - 1] ? 0 : 1)
-        );
-      }
-    }
-    return dp[b.length][a.length];
-  }
-
   return (
     <div className="p-6 max-w-2xl mx-auto text-center">
       <h1 className="text-3xl font-bold mb-4">البحث في القرآن الكريم</h1>
 
       <input
         type="text"
-        placeholder="ابحث بكلمة أو أكثر"
+        placeholder="اكتب كلمة أو أكثر..."
         className="w-full p-3 border rounded text-right"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
