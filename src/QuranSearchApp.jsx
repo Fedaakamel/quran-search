@@ -60,35 +60,35 @@ function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
   const t = token.raw;
   const tStripped = token.stripped;
 
-  // Special handling for القرآن - check multiple variations
-  const isQuranSearch = t.includes("قران") || t.includes("قراءن") || t.includes("قرءان");
-
-  if (isQuranSearch) {
-    // Match any of these variations in the ayah
-    const quranVariations = ["قران", "قراءن", "قرءان", "القران", "القراءن", "القرءان"];
+  // Special handling for القرآن - VERY STRICT
+  if (t === "القران" || t === "قران" || tStripped === "قران") {
+    // Only match if ayah contains exactly these words
     return ayWords.some(w => 
-      quranVariations.some(qv => w.includes(qv) || qv.includes(w))
+      w === "القران" || 
+      w === "قران" || 
+      w === "القرءان" || 
+      w === "قرءان"
     );
   }
 
   // Short tokens (<=2 letters) need exact match
   if (token.len <= 2) {
-    if (ayWords.includes(t)) return true;
-    if (ayWords.some((w) => similarityScore(w, t) >= 0.95)) return true;
-    return false;
+    return ayWords.includes(t);
   }
 
-  // Normal search - relaxed matching
+  // Normal search - STRICT matching
+  // 1. Exact phrase match
   if (ayNorm.includes(t)) return true;
+  
+  // 2. Exact whole word match
   if (ayWords.includes(t)) return true;
+  
+  // 3. Stripped word match (for prefixes like ال، و، ف)
   if (ayWordsStripped.includes(tStripped)) return true;
   
-  // Check if any word contains the token or vice versa
-  if (ayWords.some((w) => w.includes(t) || t.includes(w))) return true;
-  
-  // Fuzzy matching
-  if (ayWords.some((w) => similarityScore(w, t) >= 0.85)) return true;
-  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.85)) return true;
+  // 4. Very high similarity only (0.92 threshold)
+  if (ayWords.some((w) => similarityScore(w, t) >= 0.92)) return true;
+  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.92)) return true;
 
   return false;
 }
