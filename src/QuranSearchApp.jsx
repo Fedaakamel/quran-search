@@ -1,29 +1,28 @@
 import React, { useEffect, useState } from "react";
 
 /* ============================================================
-   1. Arabic NORMALIZATION (strongest version)
+   1. Arabic NORMALIZATION
    ============================================================ */
 function normalizeArabic(text = "") {
   return text
     .toString()
-    .replace(/ـ/g, "") // tatweel
-    .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "") // Quran marks & tashkeel
-    .replace(/[إأآٱءؤئ]/g, "ا") // unify all hamza/alef forms
+    .replace(/ـ/g, "")
+    .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "")
+    .replace(/[إأآٱءؤئ]/g, "ا")
     .replace(/ى/g, "ي")
     .replace(/ة/g, "ه")
-    .replace(/[^\u0600-\u06FF\s]/g, " ") // remove non-Arabic chars
+    .replace(/[^\u0600-\u06FF\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 }
 
 /* ============================================================
-   2. Prefix Stripping (only for words longer than 2 letters!)
+   2. Prefix Stripping
    ============================================================ */
 function stripPrefixes(word = "") {
   const prefixes = ["ال", "و", "ف", "ب", "ل", "س"];
-
-  if (word.length <= 2) return word; // <-- IMPORTANT FIX
+  if (word.length <= 2) return word;
 
   let w = word;
   let changed = true;
@@ -42,7 +41,7 @@ function stripPrefixes(word = "") {
 }
 
 /* ============================================================
-   3. Simple Similarity Score (for fuzzy match)
+   3. Simple Similarity Score
    ============================================================ */
 function similarityScore(a, b) {
   if (!a || !b) return 0;
@@ -55,22 +54,17 @@ function similarityScore(a, b) {
 }
 
 /* ============================================================
-   4. Evaluate whether a token matches an ayah
+   4. Token Match Logic
    ============================================================ */
 function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
   const t = token.raw;
   const tStripped = token.stripped;
 
-  /* ============================================================
-     SPECIAL RULE: القرآن / قرآن
-     ============================================================ */
-
-  const quranRoots = ["قران", "قرءان", "قرء", "قران", "قرائن"];
-  const tokenIsQuran =
-    quranRoots.includes(tStripped) || tStripped.startsWith("قران");
+  // Special handling for القرآن
+  const quranRoots = ["قران", "قرءان", "قرء"];
+  const tokenIsQuran = quranRoots.some(root => tStripped.includes(root));
 
   if (tokenIsQuran) {
-    // Only match exact (or close) Quran words
     return ayWords.some(
       (w) =>
         w === "القران" ||
@@ -81,57 +75,54 @@ function doesTokenMatchAyah(token, ayNorm, ayWords, ayWordsStripped) {
     );
   }
 
-  /* ============================================================
-     SHORT TOKENS (<=2 letters)
-     ============================================================ */
+  // Short tokens (<=2 letters) need exact match
   if (token.len <= 2) {
     if (ayWords.includes(t)) return true;
     if (ayWords.some((w) => similarityScore(w, t) >= 0.95)) return true;
     return false;
   }
 
-  /* ============================================================
-     NORMAL SEARCH
-     ============================================================ */
-
-  // phrase match
+  // Normal search
   if (ayNorm.includes(t)) return true;
-
-  // whole-word match
   if (ayWords.includes(t)) return true;
-
-  // stripped-word match
   if (ayWordsStripped.includes(tStripped)) return true;
-
-  // fuzzy match (tightened from 0.82 → 0.88)
   if (ayWords.some((w) => similarityScore(w, t) >= 0.88)) return true;
-  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.88))
-    return true;
+  if (ayWordsStripped.some((w) => similarityScore(w, tStripped) >= 0.88)) return true;
 
   return false;
 }
-
 
 /* ============================================================
    5. MAIN COMPONENT
    ============================================================ */
 export default function QuranSearchApp() {
-  const [quran, setQuran] = useState([]);
+  const [quranData, setQuranData] = useState(null);
   const [query, setQuery] = useState("");
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   /* ------------------------------------------------------------
-     Load Quran from /public/quran.json
+     Load Quran from jsDelivr CDN
      ------------------------------------------------------------ */
   useEffect(() => {
     async function load() {
       try {
-        const res = await fetch("/quran.json");
+        // Try jsDelivr first
+        let res = await fetch("https://cdn.jsdelivr.net/gh/Fedaakamel/quran-search@main/public/quran.json");
+        
+        if (!res.ok) {
+          // Fallback to local
+          res = await fetch("/quran.json");
+        }
+        
         const data = await res.json();
-        setQuran(data);
+        console.log("Loaded Quran data:", data);
+        setQuranData(data);
+        setError(null);
       } catch (e) {
         console.error("Error loading quran.json", e);
+        setError("فشل تحميل بيانات القرآن");
       } finally {
         setLoading(false);
       }
@@ -154,15 +145,18 @@ export default function QuranSearchApp() {
   };
 
   /* ------------------------------------------------------------
-     SEARCH ENGINE
+     SEARCH ENGINE - Works with nested object structure
      ------------------------------------------------------------ */
   const handleSearch = () => {
     const raw = query.trim();
-    if (!raw) return setResults([]);
+    if (!raw || !quranData) {
+      setResults([]);
+      return;
+    }
 
     const qNorm = normalizeArabic(raw);
 
-    // prepare tokens
+    // Prepare tokens
     const tokens = qNorm.split(" ").filter(Boolean).map((t) => ({
       raw: t,
       stripped: stripPrefixes(t),
@@ -171,84 +165,149 @@ export default function QuranSearchApp() {
 
     const found = [];
 
-    quran.forEach((surah) => {
-      surah.verses.forEach((v) => {
-        const ayText = v.text;
-        const ayNorm = normalizeArabic(ayText);
+    // Iterate through the nested structure
+    Object.keys(quranData).forEach((surahKey) => {
+      const surahData = quranData[surahKey];
+      
+      // Each surah contains numbered verse objects
+      Object.keys(surahData).forEach((verseKey) => {
+        const verseData = surahData[verseKey];
+        
+        if (verseData && verseData.verse) {
+          const ayText = verseData.verse;
+          const ayNorm = normalizeArabic(ayText);
 
-        const ayWords = ayNorm.split(" ").filter(Boolean);
-        const ayWordsStripped = ayWords.map((w) => stripPrefixes(w));
+          const ayWords = ayNorm.split(" ").filter(Boolean);
+          const ayWordsStripped = ayWords.map((w) => stripPrefixes(w));
 
-        // ALL tokens must match
-        const ok = tokens.every((t) =>
-          doesTokenMatchAyah(t, ayNorm, ayWords, ayWordsStripped)
-        );
+          // ALL tokens must match
+          const ok = tokens.every((t) =>
+            doesTokenMatchAyah(t, ayNorm, ayWords, ayWordsStripped)
+          );
 
-        if (ok) {
-          found.push({
-            surahId: surah.id,
-            surahName: surah.name,
-            ayah: v.id,
-            text: v.text,
-          });
+          if (ok) {
+            found.push({
+              surahId: verseData.surah,
+              surahName: verseData.surah_name,
+              ayah: verseData.ayah,
+              text: verseData.verse,
+            });
+          }
         }
       });
     });
 
+    console.log("Search results:", found.length);
     setResults(found);
   };
 
   /* ------------------------------------------------------------
      UI
      ------------------------------------------------------------ */
-  if (loading) return <div className="p-6 text-center">جارٍ تحميل القرآن…</div>;
+  if (loading) {
+    return (
+      <div className="p-6 text-center min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-cyan-50">
+        <div className="bg-white p-8 rounded-xl shadow-lg">
+          <div className="text-emerald-600 font-semibold text-xl mb-2">جارٍ تحميل القرآن الكريم…</div>
+          <div className="text-gray-500">الرجاء الانتظار</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 text-center min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-cyan-50">
+        <div className="bg-red-50 p-8 rounded-xl shadow-lg border border-red-200">
+          <div className="text-red-600 font-semibold text-xl">{error}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="p-6 max-w-3xl mx-auto text-right" dir="rtl">
-      <h1 className="text-2xl font-bold mb-4 text-green-700">بحث في القرآن الكريم</h1>
-
-      <div className="flex gap-2 mb-4">
-        <input
-          dir="rtl"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-          className="flex-1 p-3 border rounded"
-          placeholder="اكتب كلمة أو عبارة مثل: القرآن ، لا ريب ، يس"
-        />
-        <button
-          onClick={handleSearch}
-          className="px-4 py-2 bg-green-600 text-white rounded"
-        >
-          بحث
-        </button>
-      </div>
-
-      {results.length === 0 ? (
-        <div className="p-6 text-gray-500 bg-white rounded shadow">
-          لا توجد نتائج مطابقة…
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-emerald-100 to-cyan-50 p-6" dir="rtl">
+      <div className="max-w-4xl mx-auto">
+        {/* Header */}
+        <div className="bg-emerald-700 text-white rounded-xl p-6 mb-6 shadow-lg">
+          <h1 className="text-3xl font-bold text-center">بحث في القرآن الكريم</h1>
+          <p className="text-center text-emerald-100 mt-2">ابحث بكلمة أو عبارة واستمع للتلاوة</p>
         </div>
-      ) : (
-        results.map((r, i) => (
-          <div
-            key={i}
-            className="p-4 mb-3 bg-white rounded shadow border-l-4 border-green-600"
-          >
-            <div className="text-xl mb-2">{r.text}</div>
 
-            <div className="text-sm text-green-700 font-semibold">
-              سورة {r.surahName} — آية {r.ayah}
-            </div>
-
+        {/* Search Box */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 mb-6">
+          <div className="flex gap-3">
+            <input
+              dir="rtl"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              className="flex-1 p-4 border-2 border-emerald-200 rounded-lg text-lg focus:border-emerald-500 focus:outline-none"
+              placeholder="اكتب كلمة أو عبارة مثل: الله، الصلاة، لا ريب، يس"
+            />
             <button
-              onClick={() => playAudio(r.surahId, r.ayah)}
-              className="mt-2 px-3 py-1 bg-green-500 text-white rounded"
+              onClick={handleSearch}
+              className="px-8 py-4 bg-emerald-600 text-white rounded-lg font-bold hover:bg-emerald-700 transition-colors shadow-md"
             >
-              ▶ استمع (العفاسي)
+              🔍 بحث
             </button>
           </div>
-        ))
-      )}
+          
+          <div className="mt-4 text-sm text-gray-600 text-right">
+            💡 نصيحة: يمكنك البحث بكلمة واحدة أو عدة كلمات معاً
+          </div>
+        </div>
+
+        {/* Results */}
+        <div>
+          {results.length === 0 && query.trim() !== "" ? (
+            <div className="p-8 text-center text-gray-500 bg-white rounded-2xl shadow">
+              <div className="text-xl mb-2">لا توجد نتائج مطابقة</div>
+              <div className="text-sm">جرّب كلمات أخرى أو تحقق من الإملاء</div>
+            </div>
+          ) : results.length === 0 ? (
+            <div className="p-8 text-center text-gray-400 bg-white rounded-2xl shadow">
+              <div className="text-xl">ابدأ البحث لعرض النتائج</div>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="text-emerald-700 font-semibold mb-4 text-lg">
+                عُثر على {results.length} نتيجة
+              </div>
+              
+              {results.map((r, i) => (
+                <div
+                  key={i}
+                  className="p-6 bg-white rounded-2xl shadow-lg border-r-4 border-emerald-600 hover:shadow-xl transition-shadow"
+                >
+                  <div className="text-2xl leading-relaxed mb-4 text-gray-800">
+                    {r.text}
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="text-sm text-emerald-700 font-bold">
+                      سورة {r.surahName} — الآية {r.ayah}
+                    </div>
+
+                    <button
+                      onClick={() => playAudio(r.surahId, r.ayah)}
+                      className="px-4 py-2 bg-emerald-500 text-white rounded-lg hover:bg-emerald-600 transition-colors shadow-md flex items-center gap-2"
+                    >
+                      <span>▶</span>
+                      <span>استمع (العفاسي)</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="mt-8 text-center text-gray-500 text-sm">
+          <p>جميع الحقوق محفوظة © {new Date().getFullYear()}</p>
+        </div>
+      </div>
     </div>
   );
 }
