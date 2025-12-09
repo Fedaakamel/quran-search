@@ -1,91 +1,42 @@
-import React, { useEffect, useMemo, useState, useRef } from "react";
-import { Search, Book, Info, Play } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-/*
-QuranSearchApp.jsx
-Features:
-- Load quran.json (if present in /public or src; expects array of surahs with .name, .number, .ayahs[])
-- Auto-suggest words while typing (debounced)
-- Multi-word (AND) search + phrase fuzzy match
-- Word-level fuzzy matching (Levenshtein) with threshold 0.8
-- Show tafsir (via api.quran.com) for Ibn Kathir / Tabari / Saadi
-- Play audio (Mishary Alafasy recitation) per ayah
-- Display similar words from the Quran (>= 0.8 similarity or prefix)
-Notes:
-- Add full quran.json to your repo (recommended in public/ or src/) for best results:
-  Format: [{ name: "الفاتحة", number: 1, ayahs: [{ numberInSurah: 1, text: "..." }, ... ] }, ...]
-- Uses fetch to api.quran.com for tafsir & recitation audio.
+/**
+ QuranSearchApp.jsx
+ - Loads quran.json from your GitHub repo (raw)
+ - Auto-suggest (dropdown + chips)
+ - Multi-word AND search + fuzzy similarity >= 0.8
+ - Tafsir (Ibn Kathir) via api.quran.com (id 169)
+ - Audio (Mishary Al-Afasy, reciter id 7) via api.quran.com
+ - Highlight matches with green glow
+ - Graceful fallbacks
+ IMPORTANT: Replace the RAW_URL if your repo/path differs.
 */
 
-const DEMO_QURAN = [
-  {
-    name: "الفاتحة",
-    number: 1,
-    ayahs: [
-      { numberInSurah: 1, text: "بسم الله الرحمن الرحيم" },
-      { numberInSurah: 2, text: "الحمد لله رب العالمين" },
-      { numberInSurah: 5, text: "إياك نعبد وإياك نستعين" },
-    ],
-  },
-  {
-    name: "البقرة",
-    number: 2,
-    ayahs: [
-      {
-        numberInSurah: 1,
-        text: "الم",
-      },
-      {
-        numberInSurah: 2,
-        text: "ذَٰلِكَ الْكِتَابُ لَا رَيْبَ ۛ فِيهِ ۛ هُدًى لِّلْمُتَّقِينَ",
-      },
-      {
-        numberInSurah: 255,
-        text: "اللَّهُ لَا إِلَٰهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ...",
-      },
-    ],
-  },
-  {
-    name: "الحجر",
-    number: 15,
-    ayahs: [
-      {
-        numberInSurah: 22,
-        text: "فَأَنْزَلْنَا مِنَ السَّمَاءِ مَاءً فَأَسْقَيْنَاكُمُوهُ",
-      },
-    ],
-  },
-  {
-    name: "الإخلاص",
-    number: 112,
-    ayahs: [{ numberInSurah: 1, text: "قُلْ هُوَ اللَّهُ أَحَدٌ" }],
-  },
-];
+const RAW_URL =
+  "https://raw.githubusercontent.com/Fedaakamel/quran-search/main/public/quran.json";
 
+// ----- Utilities -----
 function normalizeArabic(text = "") {
-  // trim, remove Tashkeel, tatweel, unify alef/hamza/yaa/taa marbuta, remove punctuation
   return text
     .toString()
     .replace(/ـ/g, "") // tatweel
-    .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "") // tashkeel & control marks
+    .replace(/[\u0610-\u061A\u064B-\u065F\u06D6-\u06ED]/g, "") // tashkeel etc
     .replace(/[إأآا]/g, "ا")
     .replace(/ى/g, "ي")
     .replace(/[ؤ]/g, "و")
     .replace(/[ئ]/g, "ي")
     .replace(/ة/g, "ه")
-    .replace(/[ء]/g, "")
-    .replace(/[^\u0600-\u06FF\s]/g, " ") // keep only arabic letters and spaces
+    .replace(/[^\u0600-\u06FF\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
 }
 
-// Levenshtein distance + similarity
 function levenshtein(a = "", b = "") {
-  const s = a.split("");
-  const t = b.split("");
-  const n = s.length;
-  const m = t.length;
+  const A = a.split("");
+  const B = b.split("");
+  const n = A.length;
+  const m = B.length;
   if (n === 0) return m;
   if (m === 0) return n;
   const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
@@ -93,75 +44,100 @@ function levenshtein(a = "", b = "") {
   for (let j = 0; j <= m; j++) dp[0][j] = j;
   for (let i = 1; i <= n; i++) {
     for (let j = 1; j <= m; j++) {
-      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
-      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+      const cost = A[i - 1] === B[j - 1] ? 0 : 1;
+      dp[i][j] = Math.min(
+        dp[i - 1][j] + 1,
+        dp[i][j - 1] + 1,
+        dp[i - 1][j - 1] + cost
+      );
     }
   }
   return dp[n][m];
 }
-function similarityScore(a = "", b = "") {
-  const A = a || "";
-  const B = b || "";
-  const longer = A.length >= B.length ? A : B;
-  const shorter = A.length >= B.length ? B : A;
+function similarityScore(s1 = "", s2 = "") {
+  const a = s1 || "";
+  const b = s2 || "";
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
   if (longer.length === 0) return 1.0;
-  const dist = levenshtein(longer, shorter);
-  return (longer.length - dist) / longer.length;
+  const ed = levenshtein(longer, shorter);
+  return (longer.length - ed) / longer.length;
 }
 
+// highlight matches in ayahText given tokens (returns safe HTML string)
+function highlightAyah(ayahText, queryTokens = []) {
+  if (!queryTokens || queryTokens.length === 0) return escapeHtml(ayahText);
+  const normAyah = normalizeArabic(ayahText);
+  // We'll find positions of tokens in the original text approximately.
+  // Simpler approach: split ayah into words, compare normalized words and wrap matches.
+  const words = ayahText.split(/(\s+)/); // keep spaces
+  const html = words
+    .map((word) => {
+      const norm = normalizeArabic(word);
+      // if any token matches or similar >= 0.85 -> highlight
+      const match = queryTokens.some(
+        (t) => t && (norm.includes(t) || similarityScore(norm, t) >= 0.85)
+      );
+      if (match && word.trim().length > 0) {
+        return `<span class="match-glow">${escapeHtml(word)}</span>`;
+      }
+      return escapeHtml(word);
+    })
+    .join("");
+  return html;
+}
+function escapeHtml(s) {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// ----- Component -----
 export default function QuranSearchApp() {
-  const [quran, setQuran] = useState(null); // full dataset
-  const [searchText, setSearchText] = useState("");
+  const [quran, setQuran] = useState(null); // the object loaded from RAW_URL
+  const [allWords, setAllWords] = useState([]);
+  const [query, setQuery] = useState("");
+  const [chips, setChips] = useState([]); // selected suggestion chips
+  const [suggestions, setSuggestions] = useState([]);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  const [suggestions, setSuggestions] = useState([]);
-  const [similarWords, setSimilarWords] = useState([]);
-  const [selectedTafsir, setSelectedTafsir] = useState(null);
-  const [playingAudioUrl, setPlayingAudioUrl] = useState(null);
-
-  const [allWords, setAllWords] = useState([]); // built from quran
+  const [tafseerText, setTafseerText] = useState(null);
+  const [audioUrl, setAudioUrl] = useState(null);
   const audioRef = useRef(null);
-  const debounceTimer = useRef(null);
+  const suggestionTimer = useRef(null);
 
-  // Load quran.json from public or fallback to demo
+  // load Quran
   useEffect(() => {
-  fetch("https://raw.githubusercontent.com/Fedaakamel/quran-search/main/public/quran.json")
-    .then((res) => res.json())
-    .then((data) => {
-      console.log("Quran Loaded:", data);
-      setQuran(data);
-    })
-    .catch((err) => console.error("Error loading Quran:", err));
-}, []);
- {
-        // fallback to demo dataset
-        setQuran(DEMO_QURAN);
-      }
-    }
-    load();
+    fetch(RAW_URL)
+      .then((r) => r.json())
+      .then((data) => {
+        setQuran(data);
+      })
+      .catch((err) => {
+        console.error("Failed to load quran.json:", err);
+        setQuran(null);
+      });
   }, []);
 
-  // Build allWords index when quran is loaded
+  // build allWords index after quran loaded
   useEffect(() => {
     if (!quran) return;
-    const setWords = new Set();
-    for (const surah of quran) {
-      if (!surah.ayahs) continue;
-      for (const ay of surah.ayahs) {
-        const norm = normalizeArabic(ay.text);
-        norm.split(" ").forEach((w) => {
-          if (w && w.length > 0) setWords.add(w);
-        });
-      }
-    }
-    const list = Array.from(setWords).sort((a, b) => (a > b ? 1 : -1));
-    setAllWords(list);
+    const setW = new Set();
+    Object.keys(quran).forEach((surahKey) => {
+      const ayats = quran[surahKey];
+      if (!Array.isArray(ayats)) return;
+      ayats.forEach((ay) => {
+        const parts = normalizeArabic(ay.text).split(" ").filter(Boolean);
+        parts.forEach((p) => setW.add(p));
+      });
+    });
+    setAllWords(Array.from(setW));
   }, [quran]);
 
-  // Debounced autosuggest
+  // auto-suggest (debounced)
   useEffect(() => {
-    if (!searchText || searchText.trim().length === 0) {
+    if (!query || query.trim().length < 2) {
       setSuggestions([]);
       return;
     }
@@ -169,83 +145,148 @@ export default function QuranSearchApp() {
       setSuggestions([]);
       return;
     }
-    // debounce
-    if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      const norm = normalizeArabic(searchText);
-      // filter: includes or prefix or similarity >= 0.8
-      const filtered = allWords
+    if (suggestionTimer.current) clearTimeout(suggestionTimer.current);
+    suggestionTimer.current = setTimeout(() => {
+      const norm = normalizeArabic(query);
+      const candidates = allWords
         .map((w) => {
-          const score = similarityScore(norm, w);
-          return { w, score, starts: w.startsWith(norm) || w.includes(norm) };
+          const s = similarityScore(norm, w);
+          const starts = w.startsWith(norm) || w.includes(norm);
+          return { w, s, starts };
         })
-        .filter((x) => x.starts || x.score >= 0.8)
+        .filter((x) => x.starts || x.s >= 0.8)
         .sort((a, b) => {
-          // prefer starts/includes first, then similarity
           if (a.starts && !b.starts) return -1;
           if (!a.starts && b.starts) return 1;
-          return b.score - a.score;
+          return b.s - a.s;
         })
         .slice(0, 12)
         .map((x) => x.w);
-      setSuggestions(filtered);
-    }, 180);
-    // cleanup
-    return () => {
-      if (debounceTimer.current) clearTimeout(debounceTimer.current);
-    };
-  }, [searchText, allWords]);
+      setSuggestions(candidates);
+    }, 160);
+    return () => clearTimeout(suggestionTimer.current);
+  }, [query, allWords]);
 
-  // Main search handler
-  const handleSearch = (overrideText = null) => {
-    const q = normalizeArabic(overrideText !== null ? overrideText : searchText).trim();
-    if (!q || q.length === 0) {
-      setResults([]);
-      setSimilarWords([]);
+  // Helpers: add chip / remove chip
+  const addChip = (word) => {
+    const w = normalizeArabic(word);
+    if (!w) return;
+    if (!chips.includes(w)) setChips((c) => [...c, w]);
+    setQuery("");
+    setSuggestions([]);
+  };
+  const removeChip = (word) =>
+    setChips((c) => c.filter((x) => x !== word));
+
+  // Get tafsir (Ibn Kathir id=169)
+  async function fetchTafsir(surahNum, ayahNum, tafsirId = 169) {
+    try {
+      const verse_key = `${surahNum}:${ayahNum}`;
+      const url = `https://api.quran.com/api/v4/tafsirs/${tafsirId}?verse_key=${verse_key}`;
+      const r = await fetch(url);
+      const j = await r.json();
+      // api returns j.tafsir.text or similar
+      if (j && j.tafsir && j.tafsir.text) return j.tafsir.text;
+      // fallback
+      return j?.data?.tafsir || "لا يوجد تفسير متاح من المصدر.";
+    } catch (e) {
+      console.warn("Tafsir fetch failed:", e);
+      return "تعذر جلب التفسير (المصدر الخارجي قد لا يسمح بالوصول).";
+    }
+  }
+
+  // Fetch audio url for a verse (reciter 7 = Al-Afasy)
+  async function fetchAudioUrl(surahNum, ayahNum, reciterId = 7) {
+    try {
+      // endpoint that often works: quran/recitations/<reciter_id>?verse_key=...
+      const alt = `https://api.quran.com/api/v4/quran/recitations/${reciterId}?verse_key=${surahNum}:${ayahNum}`;
+      const r = await fetch(alt);
+      if (!r.ok) throw new Error("audio endpoint failed");
+      const j = await r.json();
+      // try to extract first audio file url
+      const url = j?.audio_files?.[0]?.url || j?.audio?.[0]?.url || null;
+      return url;
+    } catch (e) {
+      console.warn("Audio fetch error:", e);
+      return null;
+    }
+  }
+
+  // play audio
+  async function playAyah(surahNum, ayahNum) {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setAudioUrl(null);
+    const url = await fetchAudioUrl(surahNum, ayahNum, 7);
+    if (!url) {
+      alert(
+        "تعذر الحصول على رابط الصوت. قد يكون سبب ذلك قيود الـ CORS على مصدر الصوت."
+      );
       return;
     }
-    setLoading(true);
+    setAudioUrl(url);
+    const a = new Audio(url);
+    audioRef.current = a;
+    a.play().catch((e) => console.warn("audio play failed", e));
+  }
 
-    // split words by space (AND search), also keep phrase for phrase-similarity
-    const queryWords = q.split(" ").filter(Boolean);
+  // Main search function
+  const handleSearch = () => {
+    setTafseerText(null);
+    setResults([]);
+    if ((!query || !query.trim()) && chips.length === 0) return;
+
+    setLoading(true);
+    const textQ = normalizeArabic((query || "").trim());
+    const tokens = [
+      ...chips, // chips already normalized
+      ...(textQ ? textQ.split(/\s+/).filter(Boolean) : []),
+    ].filter(Boolean);
+
+    // If no tokens after normalization -> nothing
+    if (tokens.length === 0) {
+      setResults([]);
+      setLoading(false);
+      return;
+    }
 
     const found = [];
-    for (const surah of quran || []) {
-      if (!surah.ayahs) continue;
-      for (const ay of surah.ayahs) {
-        const normAy = normalizeArabic(ay.text);
-
-        // Check multi-word AND: each word must match somewhere in ayah (includes or fuzzy)
-        const allMatch = queryWords.every((qw) => {
-          if (!qw) return false;
-          if (normAy.includes(qw)) return true;
-          // check each ayah word
-          const ayWords = normAy.split(" ").filter(Boolean);
-          if (ayWords.some((aw) => aw.includes(qw) || qw.includes(aw))) return true;
-          // fuzzy similarity with any ayah word
-          if (ayWords.some((aw) => similarityScore(qw, aw) >= 0.8)) return true;
-          // fallback phrase similarity with entire ayah
-          if (similarityScore(q, normAy) >= 0.85) return true;
+    // iterate surahs
+    Object.keys(quran || {}).forEach((surahKey) => {
+      const ayats = quran[surahKey];
+      if (!Array.isArray(ayats)) return;
+      ayats.forEach((ay) => {
+        const ayNorm = normalizeArabic(ay.text);
+        // all tokens must match (AND) by include or fuzzy word match
+        const allMatch = tokens.every((tok) => {
+          if (ayNorm.includes(tok)) return true;
+          // check per-word similarity within ayah
+          const ayWords = ayNorm.split(" ").filter(Boolean);
+          if (ayWords.some((w) => w.includes(tok) || tok.includes(w))) return true;
+          if (ayWords.some((w) => similarityScore(w, tok) >= 0.8)) return true;
           return false;
         });
 
-        if (allMatch) {
+        // phrase similarity fallback
+        const phraseSim = similarityScore(ayNorm, tokens.join(" "));
+        if (allMatch || phraseSim >= 0.82) {
           found.push({
-            surah: surah.name,
-            surahNumber: surah.number,
-            ayahNumber: ay.numberInSurah,
-            ayahText: ay.text,
-            normAy,
+            surah: surahKey,
+            verse: ay.verse,
+            text: ay.text,
+            norm: ayNorm,
           });
         }
-      }
-    }
+      });
+    });
 
-    // rank by simple metric: phrase similarity then number of exact matches
+    // rank results: phrase sim & #exact matches
     const ranked = found
       .map((f) => {
-        const phraseSim = similarityScore(q, f.normAy);
-        const exactMatches = queryWords.reduce((acc, w) => acc + (f.normAy.includes(w) ? 1 : 0), 0);
+        const phraseSim = similarityScore(f.norm, tokens.join(" "));
+        const exactMatches = tokens.reduce((acc, t) => acc + (f.norm.includes(t) ? 1 : 0), 0);
         const score = phraseSim * 0.7 + exactMatches * 0.3;
         return { ...f, score };
       })
@@ -253,139 +294,97 @@ export default function QuranSearchApp() {
 
     setResults(ranked);
     setLoading(false);
-
-    // compute similar words box
-    const simWords = getSimilarWords(q, allWords).slice(0, 20);
-    setSimilarWords(simWords);
   };
 
-  // Get similar words (>= 0.8 or prefix match)
-  function getSimilarWords(query, wordList = []) {
-    const q = normalizeArabic(query).split(" ").filter(Boolean)[0] || normalizeArabic(query); // take first token for suggestions
-    if (!q || q.length === 0) return [];
-    const candidates = [];
-    for (const w of wordList) {
-      const s = similarityScore(q, w);
-      if (s >= 0.80 && w !== q) candidates.push({ w, s });
-      // prefix heuristic: same first 2-3 letters
-      if (w.startsWith(q.slice(0, 3)) && !candidates.some((c) => c.w === w)) candidates.push({ w, s: Math.max(s, 0.7) });
-    }
-    // sort by similarity descending
-    candidates.sort((a, b) => b.s - a.s);
-    return candidates.map((c) => c.w);
-  }
+  // get similar words for the query (first token)
+  const getSimilarWords = (q) => {
+    const token = (q || chips[0] || query).split(/\s+/)[0] || "";
+    const tok = normalizeArabic(token);
+    if (!tok) return [];
+    if (!allWords) return [];
+    const out = allWords
+      .map((w) => ({ w, s: similarityScore(w, tok) }))
+      .filter((x) => (x.s >= 0.8 || x.w.startsWith(tok.slice(0, 3))) && x.w !== tok)
+      .sort((a, b) => b.s - a.s)
+      .slice(0, 20)
+      .map((x) => x.w);
+    return out;
+  };
 
-  // fetch tafsir from api.quran.com (Ibn Kathir = 169, Tabari = 172, Saadi=171)
-  async function fetchTafsir(surahNum, ayahNum, tafsirId = 169) {
-    try {
-      // construct verse_key e.g., "2:255"
-      const verse_key = `${surahNum}:${ayahNum}`;
-      const url = `https://api.quran.com/api/v4/tafsirs/${tafsirId}?verse_key=${verse_key}`;
-      const r = await fetch(url);
-      if (!r.ok) throw new Error("No tafsir");
-      const j = await r.json();
-      if (j && j.tafsir && j.tafsir.text) return j.tafsir.text;
-      // fallback: sometimes data structure differs
-      return j?.data?.tafsir || "لا يوجد تفسير متاح";
-    } catch (e) {
-      return "تعذر جلب التفسير من المصدر الخارجي.";
-    }
-  }
-
-  // fetch audio for a verse (reciter ID 7 = Mishary Alafasy)
-  async function fetchAudioUrl(surahNum, ayahNum, reciterId = 7) {
-    try {
-      const verse_key = `${surahNum}:${ayahNum}`;
-      const url = `https://api.quran.com/api/v4/recitations/${reciterId}/by_ayah/verse_audio?verse_key=${verse_key}`;
-      // NOTE: api.quran.com has multiple endpoints; sometimes simpler to use audio_files endpoint:
-      const alt = `https://api.quran.com/api/v4/quran/recitations/${reciterId}?verse_key=${verse_key}`;
-      // Try alt first
-      const r = await fetch(alt);
-      if (!r.ok) throw new Error("audio not found");
-      const j = await r.json();
-      // try to find audio_files -> url
-      const urlCandidate = j?.audio_files?.[0]?.url || j?.audio?.[0]?.url;
-      if (urlCandidate) return urlCandidate;
-      // fallback: try first endpoint
-      const r2 = await fetch(url);
-      if (!r2.ok) throw new Error("audio not found");
-      const j2 = await r2.json();
-      return j2?.audio_files?.[0]?.url || null;
-    } catch (e) {
-      // Some endpoints may not allow CORS — then audio will fail. Return null
-      return null;
-    }
-  }
-
-  // play audio helper
-  async function playAyah(surahNum, ayahNum) {
-    // stop existing
+  // UI helpers
+  const clearAll = () => {
+    setQuery("");
+    setChips([]);
+    setSuggestions([]);
+    setResults([]);
+    setTafseerText(null);
+    setAudioUrl(null);
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
-    const url = await fetchAudioUrl(surahNum, ayahNum, 7);
-    if (!url) {
-      alert("تعذر الحصول على رابط الصوت (CORS أو خدمة غير متاحة).");
-      return;
-    }
-    setPlayingAudioUrl(url);
-    const a = new Audio(url);
-    audioRef.current = a;
-    a.play().catch((e) => {
-      console.warn("audio play failed", e);
-    });
-  }
+  };
 
-  // handy helper: click a similar word to set it as the search and run search
-  function chooseSuggestion(word) {
-    setSearchText(word);
-    setSuggestions([]);
-    setTimeout(() => handleSearch(word), 80);
-  }
-
-  // UI render
+  // render
   return (
-    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-teal-50 to-cyan-50 p-6" dir="rtl">
+    <div className="min-h-screen bg-gradient-to-br from-emerald-50 via-emerald-100 to-cyan-50 p-6" dir="rtl">
+      <style>{`
+        .match-glow {
+          padding: 0 .15rem;
+          border-radius: 4px;
+          box-shadow: 0 0 12px rgba(16,185,129,0.45);
+          background: rgba(236,253,245,0.6);
+        }
+        .chip {
+          display:inline-block;
+          padding:6px 10px;
+          border-radius:999px;
+          background:#e6fffa;
+          color:#0f766e;
+          margin:4px;
+          cursor:pointer;
+          border:1px solid #99f6e4;
+        }
+        .chip-remove { margin-left:6px; font-weight:bold; color:#0b695f; cursor:pointer; }
+      `}</style>
+
       <div className="max-w-4xl mx-auto">
-        <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white py-6 rounded-xl shadow mb-6">
-          <div className="px-6">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <Book className="w-10 h-10" />
-                <h1 className="text-3xl font-bold">البحث في القرآن الكريم</h1>
-              </div>
-              <div className="text-sm opacity-90">بحث ذكي — كلمات متشابهة ≥ 80%</div>
-            </div>
+        <div className="bg-emerald-700 text-white rounded-xl p-6 mb-6 shadow-md">
+          <div className="flex items-center justify-between">
+            <h1 className="text-3xl font-bold">البحث في القرآن الكريم</h1>
+            <div className="text-sm opacity-90">بحث ذكي — كلمات متشابة ≥ 80%</div>
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl shadow p-6 relative">
+        <div className="bg-white rounded-2xl shadow p-6 mb-6 relative">
           <div className="flex gap-3 items-center">
+            <button
+              onClick={handleSearch}
+              className="bg-emerald-600 text-white px-5 py-3 rounded-lg"
+            >
+              🔍 بحث
+            </button>
+
             <div className="relative flex-1">
               <input
                 dir="rtl"
-                value={searchText}
-                onChange={(e) => {
-                  setSearchText(e.target.value);
-                }}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleSearch();
-                    setSuggestions([]);
-                  }
+                  if (e.key === "Enter") handleSearch();
                 }}
-                placeholder="اكتب كلمة أو عبارة للبحث... مثل: لا ريب أو فاسقيناكموه"
-                className="w-full border rounded-lg px-4 py-3 text-lg focus:outline-none"
+                placeholder="اكتب كلمة أو عبارة... (ستظهر اقتراحات أثناء الكتابة)"
+                className="w-full border rounded-lg p-3"
               />
+
               {/* suggestions dropdown */}
               {suggestions && suggestions.length > 0 && (
-                <div className="absolute left-0 right-0 bg-white border mt-2 rounded shadow z-50 max-h-64 overflow-auto">
+                <div className="absolute left-0 right-0 mt-2 bg-white border rounded shadow z-50 max-h-52 overflow-auto">
                   {suggestions.map((s, i) => (
                     <div
                       key={i}
-                      className="px-3 py-2 hover:bg-emerald-50 cursor-pointer"
-                      onClick={() => chooseSuggestion(s)}
+                      className="px-3 py-2 hover:bg-emerald-50 cursor-pointer text-right"
+                      onClick={() => addChip(s)}
                     >
                       {s}
                     </div>
@@ -395,155 +394,133 @@ export default function QuranSearchApp() {
             </div>
 
             <button
-              onClick={() => handleSearch()}
-              className="bg-emerald-600 text-white px-6 py-3 rounded-lg flex items-center gap-2 hover:from-emerald-700"
+              onClick={() => {
+                // quick add typed term as chip
+                if (query.trim()) addChip(query.trim());
+              }}
+              className="px-4 py-2 border rounded text-sm"
             >
-              <Search className="w-5 h-5" />
-              بحث
+              إضافة
+            </button>
+
+            <button onClick={clearAll} className="px-4 py-2 border rounded text-sm">
+              مسح
             </button>
           </div>
 
-          <div className="mt-3 text-sm text-gray-600">
-            <span className="font-semibold">نصائح: </span>
-            يمكنك البحث بكلمة واحدة أو عدة كلمات (AND). كما ستظهر كلمات مشابهة أو اقتراحات وأقصى شبه 80%.
+          <div className="mt-4 text-sm text-gray-600 text-right">
+            نصائح: يمكنك البحث بكلمة واحدة أو عدة كلمات (AND). كما ستظهر اقتراحات وكلمات مشابهة.
+          </div>
+
+          {/* chips */}
+          <div className="mt-3 text-right">
+            {chips.map((c, i) => (
+              <span className="chip" key={i} onClick={() => removeChip(c)}>
+                {c}
+                <span className="chip-remove">×</span>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {/* similar words box */}
+        <div className="mb-6">
+          <h3 className="text-lg font-bold mb-2 text-right">كلمات مشابهة</h3>
+          <div className="bg-white rounded-2xl p-4 shadow text-right">
+            {getSimilarWords(query).length === 0 ? (
+              <div className="text-gray-500">لا توجد اقتراحات مشابهة</div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {getSimilarWords(query).map((w, i) => (
+                  <button key={i} className="chip" onClick={() => addChip(w)}>
+                    {w}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
         {/* results */}
-        <div className="mt-6">
-          {loading && (
-            <div className="text-center py-8">
-              <div className="inline-block animate-spin rounded-full h-12 w-12 border-4 border-emerald-600 border-t-transparent"></div>
-              <div className="mt-3 text-gray-600">جاري البحث...</div>
+        <div>
+          {loading && <div className="text-center py-6">جاري البحث...</div>}
+
+          {!loading && results.length === 0 && (
+            <div className="bg-white rounded-2xl p-6 shadow text-center text-gray-600">
+              لا توجد نتائج — جرّب كلمات أخرى أو اضغط اقتراح.
             </div>
           )}
 
-          {!loading && results.length > 0 && (
-            <div className="space-y-6">
-              <h2 className="text-2xl font-bold">النتائج ({results.length})</h2>
-              {results.map((r, idx) => (
-                <div key={idx} className="bg-white rounded-2xl shadow p-4 border-l-4 border-emerald-600">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <h3 className="text-xl font-bold">سورة {r.surah} — آية {r.ayahNumber}</h3>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        className="px-3 py-1 border rounded text-sm hover:bg-emerald-50"
-                        onClick={async () => {
-                          setSelectedTafsir("جاري جلب التفسير...");
-                          const tafsir = await fetchTafsir(r.surahNumber, r.ayahNumber, 169); // Ibn Kathir
-                          setSelectedTafsir(tafsir);
-                        }}
-                      >
-                        عرض تفسير (ابن كثير)
-                      </button>
-
-                      <button
-                        className="px-3 py-1 border rounded text-sm hover:bg-emerald-50"
-                        onClick={async () => {
-                          setSelectedTafsir("جاري جلب التفسير...");
-                          const tafsir = await fetchTafsir(r.surahNumber, r.ayahNumber, 172); // Tabari
-                          setSelectedTafsir(tafsir);
-                        }}
-                      >
-                        عرض تفسير (الطبري)
-                      </button>
-
-                      <button
-                        className="px-3 py-1 border rounded text-sm hover:bg-emerald-50"
-                        onClick={() => playAyah(r.surahNumber, r.ayahNumber)}
-                      >
-                        <Play className="w-4 h-4 inline-block" /> استمع
-                      </button>
+          {!loading &&
+            results.map((r, idx) => (
+              <div key={idx} className="bg-white rounded-2xl p-6 mb-4 shadow text-right">
+                <div className="flex justify-between items-start">
+                  <div>
+                    <div
+                      className="text-2xl leading-relaxed"
+                      // highlight
+                      dangerouslySetInnerHTML={{
+                        __html: highlightAyah(r.text, [...chips, ...(query ? normalizeArabic(query).split(/\s+/) : [])]),
+                      }}
+                    />
+                    <div className="mt-3 text-sm text-emerald-700 font-bold">
+                      سورة {r.surah} — آية {r.verse}
                     </div>
                   </div>
 
-                  <div className="mt-4 text-3xl text-center leading-relaxed">{r.ayahText}</div>
+                  <div className="flex flex-col gap-2">
+                    <button
+                      onClick={async () => {
+                        setTafseerText("جاري جلب التفسير...");
+                        const t = await fetchTafsir(r.surah, r.verse, 169);
+                        setTafseerText(t);
+                      }}
+                      className="px-3 py-1 border rounded text-sm"
+                    >
+                      عرض تفسير (ابن كثير)
+                    </button>
 
-                  <div className="mt-4 text-gray-700">
-                    <strong>رابط أقوى التطابق: </strong>
-                    <span className="text-sm text-gray-600">نسبة مطابقة داخلية: {(r.score || 0).toFixed(2)}</span>
+                    <button
+                      onClick={() => {
+                        playAyah(r.surah, r.verse);
+                      }}
+                      className="px-3 py-1 border rounded text-sm"
+                    >
+                      ▶ استمع (العفاسي)
+                    </button>
                   </div>
                 </div>
-              ))}
+              </div>
+            ))}
+
+          {/* tafsir panel */}
+          {tafseerText && (
+            <div className="bg-white rounded-2xl p-4 shadow text-right mt-4">
+              <h4 className="font-bold mb-2">التفسير (ابن كثير)</h4>
+              <div style={{ whiteSpace: "pre-wrap" }}>{tafseerText}</div>
+              <div className="mt-2 text-sm text-gray-500">المصدر: api.quran.com</div>
             </div>
           )}
 
-          {!loading && results.length === 0 && searchText.trim().length > 0 && (
-            <div className="text-center p-8 bg-white rounded-2xl shadow">
-              <div className="text-xl mb-2">لا توجد نتائج</div>
-              <div className="text-gray-600">جرب كلمات مشابهة أو اضغط اقتراح من أسفل</div>
-            </div>
-          )}
-
-          {!loading && (!searchText || searchText.trim().length === 0) && (
-            <div className="text-center p-8 bg-white rounded-2xl shadow">
-              <div className="text-xl mb-2">ابدأ البحث</div>
-              <div className="text-gray-600">اكتب كلمة من القرآن لتظهر النتائج والتفاسير والصوت</div>
+          {/* audio player (if playing) */}
+          {audioUrl && (
+            <div className="fixed bottom-6 left-6 bg-white rounded p-3 shadow">
+              <audio src={audioUrl} controls autoPlay onEnded={() => setAudioUrl(null)} />
+              <div className="mt-2 text-sm text-gray-600">تشغيل صوت — العفاسي</div>
+              <div className="mt-1">
+                <button
+                  onClick={() => {
+                    if (audioRef.current) audioRef.current.pause();
+                    setAudioUrl(null);
+                  }}
+                  className="text-red-500 text-sm"
+                >
+                  إيقاف
+                </button>
+              </div>
             </div>
           )}
         </div>
-
-        {/* similar words */}
-        {!loading && similarWords && similarWords.length > 0 && (
-          <div className="mt-6 bg-yellow-50 border rounded p-4">
-            <h3 className="font-bold mb-2">كلمات مشابهة في القرآن</h3>
-            <div className="flex flex-wrap gap-2">
-              {similarWords.map((w, i) => (
-                <button
-                  key={i}
-                  onClick={() => chooseSuggestion(w)}
-                  className="bg-white px-3 py-1 rounded shadow text-gray-700"
-                >
-                  {w}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* playing audio status */}
-        {playingAudioUrl && (
-          <div className="fixed bottom-6 left-6 bg-white p-3 rounded shadow flex items-center gap-3">
-            <div>تشغيل صوت: </div>
-            <audio src={playingAudioUrl} controls autoPlay onEnded={() => setPlayingAudioUrl(null)} />
-            <button
-              onClick={() => {
-                if (audioRef.current) {
-                  audioRef.current.pause();
-                  audioRef.current = null;
-                }
-                setPlayingAudioUrl(null);
-              }}
-              className="text-red-500 text-sm"
-            >
-              إيقاف
-            </button>
-          </div>
-        )}
-
-        {/* show selected tafsir */}
-        {selectedTafsir && (
-          <div className="mt-6 bg-white rounded p-4 shadow">
-            <h3 className="font-bold">التفسير</h3>
-            <div className="mt-2 text-right leading-relaxed" style={{ whiteSpace: "pre-wrap" }}>
-              {selectedTafsir}
-            </div>
-            <div className="mt-2 text-sm text-gray-500">المصدر: api.quran.com</div>
-
-            <div className="mt-3">
-              <button
-                className="text-sm underline text-blue-600"
-                onClick={() => {
-                  setSelectedTafsir(null);
-                }}
-              >
-                إغلاق
-              </button>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
