@@ -126,14 +126,15 @@ export default function QuranSearchApp() {
 
   // Load quran.json from public or fallback to demo
   useEffect(() => {
-    async function load() {
-      try {
-        // Try public path first (if you place quran.json in public/)
-        const res = await fetch("/quran.json");
-        if (!res.ok) throw new Error("no quran.json in public");
-        const data = await res.json();
-        setQuran(data);
-      } catch (err) {
+  fetch("https://raw.githubusercontent.com/Fedaakamel/quran-search/main/public/quran.json")
+    .then((res) => res.json())
+    .then((data) => {
+      console.log("Quran Loaded:", data);
+      setQuran(data);
+    })
+    .catch((err) => console.error("Error loading Quran:", err));
+}, []);
+ {
         // fallback to demo dataset
         setQuran(DEMO_QURAN);
       }
